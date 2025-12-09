@@ -16,48 +16,52 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
     and compute summary metrics for the project.
     """
 
-    conn = sqlite3.connect(db_name)
-    cur = conn.cursor()
-
-    # 1. Average last sale price by size
-    cur.execute("""
-        SELECT size, AVG(last_sale)
-        FROM market_data
-        WHERE last_sale IS NOT NULL
-        GROUP BY size
-        ORDER BY size
-    """)
-    avg_price_by_size = {size: avg for size, avg in cur.fetchall()}
-
-    # 2. Total sales volume per product (joined with product name)
-    cur.execute("""
-        SELECT p.name, SUM(m.sales_volume) AS total_volume
-        FROM market_data AS m
-        JOIN products AS p
-            ON m.product_id = p.product_id
-        WHERE m.sales_volume IS NOT NULL
-        GROUP BY m.product_id
-        ORDER BY total_volume DESC
-        LIMIT 10
-    """)
-    top_products_by_volume = {name: vol for name, vol in cur.fetchall()}
-
-    # 3. Overall average sales volume (optional extra metric)
-    cur.execute("""
-        SELECT AVG(sales_volume)
-        FROM market_data
-        WHERE sales_volume IS NOT NULL
-    """)
-    row = cur.fetchone()
-    overall_avg_volume = row[0] if row and row[0] is not None else 0
-
-    conn.close()
-
-    return {
-        "avg_price_by_size": avg_price_by_size,
-        "top_products_by_volume": top_products_by_volume,
-        "overall_avg_volume": overall_avg_volume
+    metrics = {
+        "avg_price_by_size": {},
+        "top_products_by_volume": {},
+        "overall_avg_volume": 0
     }
+
+    try:
+        with sqlite3.connect(db_name) as conn:
+            cur = conn.cursor()
+
+            # 1. Average last sale price by size
+            cur.execute("""
+                SELECT size, AVG(last_sale)
+                FROM market_data
+                WHERE last_sale IS NOT NULL
+                GROUP BY size
+                ORDER BY size
+            """)
+            metrics["avg_price_by_size"] = {size: avg for size, avg in cur.fetchall()}
+
+            # 2. Total sales volume per product (JOIN with product name)
+            cur.execute("""
+                SELECT p.name, SUM(m.sales_volume) AS total_volume
+                FROM market_data AS m
+                JOIN products AS p
+                    ON m.product_id = p.product_id
+                WHERE m.sales_volume IS NOT NULL
+                GROUP BY m.product_id
+                ORDER BY total_volume DESC
+                LIMIT 10
+            """)
+            metrics["top_products_by_volume"] = {name: vol for name, vol in cur.fetchall()}
+
+            # 3. Overall average sales volume
+            cur.execute("""
+                SELECT AVG(sales_volume)
+                FROM market_data
+                WHERE sales_volume IS NOT NULL
+            """)
+            row = cur.fetchone()
+            metrics["overall_avg_volume"] = row[0] if row and row[0] is not None else 0
+
+    except sqlite3.Error as e:
+        print("Database error:", e)
+
+    return metrics
 
 
 def write_metrics_to_file(metrics: dict, filename: str = "metrics_summary.json"):
