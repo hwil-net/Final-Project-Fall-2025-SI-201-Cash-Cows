@@ -120,3 +120,46 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
         "avg_price_by_size": avg_price_by_size,
         "daily_pairs_sold": daily_pairs_sold
     }
+
+def write_metrics_to_file(metrics: dict, filename: str = "metrics_summary.json"):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=4)
+
+
+def create_graphs(metrics: dict):
+    sizes = list(metrics["avg_price_by_size"].keys())
+    avg_prices = list(metrics["avg_price_by_size"].values())
+
+    plt.figure()
+    plt.bar(sizes, avg_prices)
+    plt.xlabel("Shoe size")
+    plt.ylabel("Average sale price")
+    plt.title("Average sale price by size")
+    plt.tight_layout()
+    plt.savefig("avg_price_by_size.png")
+    plt.show()
+
+    dates = list(metrics["daily_pairs_sold"].keys())
+    totals = list(metrics["daily_pairs_sold"].values())
+
+    if dates:
+        plt.figure()
+        plt.plot(dates, totals, marker="o")
+        plt.xticks(rotation=45)
+        plt.xlabel("Date")
+        plt.ylabel("Total pairs sold")
+        plt.title("Daily pairs sold")
+        plt.tight_layout()
+        plt.savefig("daily_pairs_sold.png")
+        plt.show()
+
+
+def main():
+    metrics = create_metrics(DB_NAME)
+    print("Average pairs sold per day:", metrics["avg_pairs_sold_per_day"])
+    write_metrics_to_file(metrics, "metrics_summary.json")
+    create_graphs(metrics)
+
+
+if __name__ == "__main__":
+    main()
