@@ -6,9 +6,32 @@
 import sqlite3
 import json
 import matplotlib.pyplot as plt
+import os
 
 DB_NAME = "stockx_data.db"
 
+def check_db_exists(db_name: str = DB_NAME):
+    """
+    Simple check to ensure the database and tables exist 
+    before trying to calculate metrics.
+    """
+    if not os.path.exists(db_name):
+        print(f"Error: {db_name} not found. Run api_functions.py first.")
+        return False
+
+    try:
+        with sqlite3.connect(db_name) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM market_data")
+            count = cur.fetchone()[0]
+            if count == 0:
+                print("Warning: Database exists but 'market_data' table is empty.")
+                print("You need to run api_functions.py to fetch data.")
+                return False
+            return True
+    except sqlite3.OperationalError:
+        print("Error: Database is missing required tables.")
+        return False
 
 def create_metrics(db_name: str = DB_NAME) -> dict:
     """
@@ -19,6 +42,7 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
     metrics = {
         "avg_price_by_size": {},
         "top_products_by_volume": {},
+        "most_expensive_sales": {},  # <--- NEW METRIC ADDED
         "overall_avg_volume": 0
     }
 
@@ -53,7 +77,23 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
                 name: vol for name, vol in cur.fetchall()
             }
 
-            # 3. Overall average sales volume
+            # 3. Most Expensive Shoes (by Last Sale Price)
+            cur.execute("""
+                SELECT p.name, m.last_sale
+                FROM market_data AS m
+                JOIN products AS p
+                    ON m.product_id = p.product_id
+                WHERE m.last_sale IS NOT NULL
+                ORDER BY m.last_sale DESC
+                LIMIT 10
+            """)
+            # Using a list of tuples or dict for this might be better if names duplicate,
+            # but for simplicity we'll assume unique high sales or just take the top hits.
+            metrics["most_expensive_sales"] = {
+                name: price for name, price in cur.fetchall()
+            }
+
+            # 4. Overall average sales volume
             cur.execute("""
                 SELECT AVG(sales_volume)
                 FROM market_data
@@ -73,21 +113,18 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
 def write_metrics_to_file(metrics: dict, filename: str = "metrics_summary.json"):
     """
     Write the calculated metrics to a JSON file.
-    This covers the 'write data file from calculations' requirement.
     """
     try:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=4)
+        print(f"Successfully saved metrics to {filename}")
     except IOError as e:
         print("File write error:", e)
 
 
 def create_graphs(metrics: dict):
     """
-    Create visualizations:
-    1) Bar chart: shoe size vs average last sale price
-    2) Bar chart: top products vs total sales volume
-    Both are saved as PNG files and shown on screen.
+    Create visualizations and save as PNG files.
     """
 
     # 1. Size vs average last sale price
@@ -97,36 +134,65 @@ def create_graphs(metrics: dict):
     if not sizes:
         print("No price-by-size data available for graph.")
     else:
-        plt.figure()
-        plt.bar(sizes, avg_prices)
-        plt.xlabel("Shoe size")
-        plt.ylabel("Average last sale price")
-        plt.title("Average last sale price by size")
+        plt.figure(figsize=(10, 6))
+        plt.bar(sizes, avg_prices, color='skyblue')
+        plt.xlabel("Shoe Size")
+        plt.ylabel("Average Last Sale Price ($)")
+        plt.title("Average Last Sale Price by Size")
         plt.tight_layout()
         plt.savefig("avg_price_by_size.png")
-        plt.show()
+        print("Saved graph: avg_price_by_size.png")
+        plt.close() # Close figure to free memory
 
     # 2. Product vs total sales volume (top 10)
     names = list(metrics["top_products_by_volume"].keys())
+    # Shorten names for cleaner graph
+    short_names = [n[:15] + "..." if len(n) > 15 else n for n in names]
     volumes = list(metrics["top_products_by_volume"].values())
 
     if not names:
         print("No product volume data available for graph.")
     else:
-        plt.figure()
-        plt.bar(names, volumes)
+        plt.figure(figsize=(10, 6))
+        plt.bar(short_names, volumes, color='salmon')
         plt.xticks(rotation=45, ha="right")
         plt.xlabel("Product")
-        plt.ylabel("Total sales volume")
-        plt.title("Top products by sales volume")
+        plt.ylabel("Total Sales Volume")
+        plt.title("Top Products by Sales Volume")
         plt.tight_layout()
         plt.savefig("top_products_by_volume.png")
-        plt.show()
+        print("Saved graph: top_products_by_volume.png")
+        plt.close()
+
+    # 3. Most Expensive Shoes (Top 10 by Price) <--- NEW VISUALIZATION
+    exp_names = list(metrics["most_expensive_sales"].keys())
+    # Shorten names
+    short_exp_names = [n[:15] + "..." if len(n) > 15 else n for n in exp_names]
+    prices = list(metrics["most_expensive_sales"].values())
+
+    if not exp_names:
+        print("No pricing data available for expensive shoes graph.")
+    else:
+        plt.figure(figsize=(10, 6))
+        plt.bar(short_exp_names, prices, color='gold')
+        plt.xticks(rotation=45, ha="right")
+        plt.xlabel("Product")
+        plt.ylabel("Last Sale Price ($)")
+        plt.title("Top 10 Most Expensive Shoes (Last Sale)")
+        plt.tight_layout()
+        plt.savefig("most_expensive_shoes.png")
+        print("Saved graph: most_expensive_shoes.png")
+        plt.close()
 
 
 def main():
+    # Only proceed if data exists
+    if not check_db_exists():
+        return
+
     metrics = create_metrics()
-    print("Overall average sales volume:", metrics["overall_avg_volume"])
+    print(f"Overall average sales volume: {metrics['overall_avg_volume']:.2f}")
+    
     write_metrics_to_file(metrics, "metrics_summary.json")
     create_graphs(metrics)
 
