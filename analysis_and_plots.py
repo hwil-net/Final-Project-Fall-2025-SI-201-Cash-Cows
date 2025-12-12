@@ -6,9 +6,32 @@
 import sqlite3
 import json
 import matplotlib.pyplot as plt
+import os
 
 DB_NAME = "stockx_data.db"
 
+def check_db_exists(db_name: str = DB_NAME):
+    """
+    Simple check to ensure the database and tables exist 
+    before trying to calculate metrics.
+    """
+    if not os.path.exists(db_name):
+        print(f"Error: {db_name} not found. Run api_functions.py first.")
+        return False
+
+    try:
+        with sqlite3.connect(db_name) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM market_data")
+            count = cur.fetchone()[0]
+            if count == 0:
+                print("Warning: Database exists but 'market_data' table is empty.")
+                print("You need to run api_functions.py to fetch data.")
+                return False
+            return True
+    except sqlite3.OperationalError:
+        print("Error: Database is missing required tables.")
+        return False
 
 def create_metrics(db_name: str = DB_NAME) -> dict:
     """
@@ -19,9 +42,10 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
     """
 
     metrics = {
-        "stockx_avg_ask_by_size": {},
-        "kicks_avg_ask_by_size": {},
-        "stockx_vs_kicks_samples": []
+        "avg_price_by_size": {},
+        "top_products_by_volume": {},
+        "most_expensive_sales": {},
+        "overall_avg_volume": 0
     }
 
     try:
@@ -36,19 +60,49 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
                 WHERE lowest_ask IS NOT NULL
                 GROUP BY size
                 ORDER BY size
-                """
-            )
-            metrics["stockx_avg_ask_by_size"] = {size: avg for size, avg in cur.fetchall()}
+            """)
+            metrics["avg_price_by_size"] = {
+                size: avg for size, avg in cur.fetchall()
+            }
 
-            # Kicks: average lowest_ask by size
-            cur.execute(
-                """
-                SELECT size, AVG(lowest_ask)
-                FROM kicks_prices
-                WHERE lowest_ask IS NOT NULL
-                GROUP BY size
-                ORDER BY size
-                """
+            # 2. Total sales volume per product (JOIN with product name)
+            cur.execute("""
+                SELECT p.name, SUM(m.sales_volume) AS total_volume
+                FROM market_data AS m
+                JOIN products AS p
+                    ON m.product_id = p.product_id
+                WHERE m.sales_volume IS NOT NULL
+                GROUP BY m.product_id
+                ORDER BY total_volume DESC
+                LIMIT 10
+            """)
+            metrics["top_products_by_volume"] = {
+                name: vol for name, vol in cur.fetchall()
+            }
+
+            # 3. Most Expensive Shoes (by Last Sale Price)
+            cur.execute("""
+                SELECT p.name, m.last_sale
+                FROM market_data AS m
+                JOIN products AS p
+                    ON m.product_id = p.product_id
+                WHERE m.last_sale IS NOT NULL
+                ORDER BY m.last_sale DESC
+                LIMIT 10
+            """)
+            metrics["most_expensive_sales"] = {
+                name: price for name, price in cur.fetchall()
+            }
+
+            # 4. Overall average sales volume
+            cur.execute("""
+                SELECT AVG(sales_volume)
+                FROM market_data
+                WHERE sales_volume IS NOT NULL
+            """)
+            row = cur.fetchone()
+            metrics["overall_avg_volume"] = (
+                row[0] if row and row[0] is not None else 0
             )
             metrics["kicks_avg_ask_by_size"] = {size: avg for size, avg in cur.fetchall()}
 
@@ -89,85 +143,87 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
 
     return metrics
 
-
 def write_metrics_to_file(metrics: dict, filename: str = "metrics_summary.json"):
     """
     Write the calculated metrics to a JSON file.
-    This covers the 'write data file from calculations' requirement.
     """
     try:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=4)
+        print(f"Successfully saved metrics to {filename}")
     except IOError as e:
         print("File write error:", e)
 
-
 def create_graphs(metrics: dict):
     """
-    Visualizations:
-    1) Bar chart: size vs average StockX lowest ask.
-    2) Bar chart: size vs average Kicks lowest ask.
-    3) Grouped bar chart: StockX vs Kicks for joined samples.
+    Create visualizations and save as PNG files.
     """
 
-    # 1. StockX size vs average lowest ask
-    sx_sizes = list(metrics["stockx_avg_ask_by_size"].keys())
-    sx_avgs = list(metrics["stockx_avg_ask_by_size"].values())
-    if sx_sizes:
-        plt.figure()
-        plt.bar(sx_sizes, sx_avgs)
-        plt.xlabel("Shoe size")
-        plt.ylabel("Avg StockX lowest ask ($)")
-        plt.title("StockX Average Lowest Ask by Size")
-        plt.tight_layout()
-        plt.savefig("stockx_avg_ask_by_size.png")
-        plt.show()
+    # 1. Size vs average last sale price
+    sizes = list(metrics["avg_price_by_size"].keys())
+    avg_prices = list(metrics["avg_price_by_size"].values())
+
+    if not sizes:
+        print("No price-by-size data available for graph.")
     else:
-        print("No StockX price-by-size data available.")
-
-    # 2. Kicks size vs average lowest ask
-    kk_sizes = list(metrics["kicks_avg_ask_by_size"].keys())
-    kk_avgs = list(metrics["kicks_avg_ask_by_size"].values())
-    if kk_sizes:
-        plt.figure()
-        plt.bar(kk_sizes, kk_avgs, color="orange")
-        plt.xlabel("Shoe size")
-        plt.ylabel("Avg Kicks lowest ask ($)")
-        plt.title("Kicks Average Lowest Ask by Size")
+        plt.figure(figsize=(10, 6))
+        plt.bar(sizes, avg_prices, color='skyblue')
+        plt.xlabel("Shoe Size")
+        plt.ylabel("Average Last Sale Price ($)")
+        plt.title("Average Last Sale Price by Size")
         plt.tight_layout()
-        plt.savefig("kicks_avg_ask_by_size.png")
-        plt.show()
+        plt.savefig("avg_price_by_size.png")
+        print("Saved graph: avg_price_by_size.png")
+        plt.close()
+
+    # 2. Product vs total sales volume (top 10)
+    names = list(metrics["top_products_by_volume"].keys())
+    # Shorten names for cleaner graph
+    short_names = [n[:15] + "..." if len(n) > 15 else n for n in names]
+    volumes = list(metrics["top_products_by_volume"].values())
+
+    if not names:
+        print("No product volume data available for graph.")
     else:
-        print("No Kicks price-by-size data available.")
-
-    # 3. Grouped bars: StockX vs Kicks for joined samples
-    samples = metrics.get("stockx_vs_kicks_samples", [])
-    if samples:
-        labels = [f"{s['name']} (sz {s['size']})" for s in samples]
-        sx_vals = [s["stockx_ask"] or 0 for s in samples]
-        kk_vals = [s["kicks_ask"] or 0 for s in samples]
-
-        x = range(len(labels))
-        width = 0.45
-        plt.figure(figsize=(10, 5))
-        plt.bar([i - width/2 for i in x], sx_vals, width=width, label="StockX", color="#4C78A8")
-        plt.bar([i + width/2 for i in x], kk_vals, width=width, label="Kicks", color="#F58518")
-        plt.xticks(list(x), labels, rotation=45, ha="right")
-        plt.ylabel("Lowest Ask ($)")
-        plt.title("StockX vs Kicks: Lowest Ask by Product & Size")
-        plt.legend()
+        plt.figure(figsize=(10, 6))
+        plt.bar(short_names, volumes, color='salmon')
+        plt.xticks(rotation=45, ha="right")
+        plt.xlabel("Product")
+        plt.ylabel("Total Sales Volume")
+        plt.title("Top Products by Sales Volume")
         plt.tight_layout()
-        plt.savefig("stockx_vs_kicks_grouped.png")
-        plt.show()
-    else:
-        print("No joined StockX vs Kicks samples available to plot.")
+        plt.savefig("top_products_by_volume.png")
+        print("Saved graph: top_products_by_volume.png")
+        plt.close()
 
+    # 3. Most Expensive Shoes (Top 10 by Price)
+    exp_names = list(metrics["most_expensive_sales"].keys())
+    short_exp_names = [n[:15] + "..." if len(n) > 15 else n for n in exp_names]
+    prices = list(metrics["most_expensive_sales"].values())
+
+    if not exp_names:
+        print("No pricing data available for expensive shoes graph.")
+    else:
+        plt.figure(figsize=(10, 6))
+        plt.bar(short_exp_names, prices, color='gold')
+        plt.xticks(rotation=45, ha="right")
+        plt.xlabel("Product")
+        plt.ylabel("Last Sale Price ($)")
+        plt.title("Top 10 Most Expensive Shoes (Last Sale)")
+        plt.tight_layout()
+        plt.savefig("most_expensive_shoes.png")
+        print("Saved graph: most_expensive_shoes.png")
+        plt.close()
 
 def main():
+    if not check_db_exists():
+        return
+
     metrics = create_metrics()
+    print(f"Overall average sales volume: {metrics['overall_avg_volume']:.2f}")
+    
     write_metrics_to_file(metrics, "metrics_summary.json")
     create_graphs(metrics)
-
 
 if __name__ == "__main__":
     main()
