@@ -20,7 +20,7 @@ def create_tables():
                     style_id TEXT, retail_price REAL, release_date TEXT)''')
     cur.execute('''CREATE TABLE IF NOT EXISTS market_data
                    (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id TEXT, size TEXT,
-                    lowest_ask REAL, last_sale REAL, sales_volume INTEGER,
+                    lowest_ask REAL, highest_bid REAL, sell_faster REAL,
                     FOREIGN KEY (product_id) REFERENCES products(product_id))''')
     conn.commit()
     conn.close()
@@ -31,17 +31,48 @@ def get_api_products(search_term):
     return resp.json().get("products", []) if resp.status_code == 200 else []
 
 def get_market_data(product_id):
-    resp = requests.get(f"{API_BASE}/catalog/products/{product_id}", headers=HEADERS)
+    # grab market data for a product
+    resp = requests.get(f"{API_BASE}/catalog/products/{product_id}/market-data", headers=HEADERS)
+    if resp.status_code != 200:
+        print(f"    Market data error for {product_id}: status {resp.status_code}")
+        return {}
+    return resp.json()
+
+def get_variants(product_id):
+    # get different sizes for a product
+    resp = requests.get(f"{API_BASE}/catalog/products/{product_id}/variants", headers=HEADERS)
+    if resp.status_code == 200:
+        data = resp.json()
+        # Handle both list and dict responses
+        return data if isinstance(data, list) else data.get("variants", [])
+    return []
+
+def get_variant_market_data(product_id, variant_id):
+    # market data for one specific size
+    resp = requests.get(f"{API_BASE}/catalog/products/{product_id}/variants/{variant_id}/market-data", headers=HEADERS)
     return resp.json() if resp.status_code == 200 else {}
 
 def insert_api_data(product_data):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     attrs = product_data.get("productAttributes", {})
+    product_id = product_data.get("productId")
+    
     cur.execute('''INSERT OR REPLACE INTO products VALUES (?,?,?,?,?,?)''',
-                (product_data.get("productId"), product_data.get("title"), 
+                (product_id, product_data.get("title"), 
                  product_data.get("brand"), product_data.get("styleId"),
                  attrs.get("retailPrice"), attrs.get("releaseDate")))
+    conn.commit()
+    conn.close()
+    return product_id
+
+def insert_market_data(product_id, size, lowest_ask, highest_bid, sell_faster):
+    # save market data to db
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute('''INSERT INTO market_data (product_id, size, lowest_ask, highest_bid, sell_faster)
+                   VALUES (?, ?, ?, ?, ?)''',
+                (product_id, size, lowest_ask, highest_bid, sell_faster))
     conn.commit()
     conn.close()
 
@@ -61,14 +92,61 @@ if __name__ == "__main__":
     
     print(f"\nTotal rows inserted: {total}")
 
-     # test get_market_data 
+    # Fetch market data for products
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    cur.execute("SELECT product_id FROM products LIMIT 3")
+    cur.execute("SELECT product_id FROM products LIMIT 5")
     product_ids = [row[0] for row in cur.fetchall()]
     conn.close()
     
-    print("\nTesting get_market_data:")
+    print("\nFetching market data:")
     for pid in product_ids:
+        # grab pricing info
         market = get_market_data(pid)
-        print(f"{pid}: {market}")
+        
+        # api can return different formats
+        if isinstance(market, list):
+            # list of variants
+            print(f"  {pid}: found {len(market)} variants")
+            for variant_data in market[:3]:  # Limit to 3 variants
+                std = variant_data.get("standardMarketData", {})
+                var_id = variant_data.get("variantId")
+                lowest = std.get("lowestAsk")
+                highest_bid = std.get("highestBidAmount")
+                sell_faster = std.get("sellFaster")
+                
+                if lowest:
+                    insert_market_data(pid, str(var_id)[:8], lowest, highest_bid, sell_faster)
+        elif market:
+            # dict format
+            std = market.get("standardMarketData", market)
+            lowest = std.get("lowestAsk")
+            highest_bid = std.get("highestBidAmount")
+            sell_faster = std.get("sellFaster")
+            print(f"  {pid}: lowestAsk=${lowest}, highestBid=${highest_bid}")
+            
+            # save it
+            if lowest or highest_bid:
+                insert_market_data(pid, "ALL", lowest, highest_bid, sell_faster)
+        
+            # check individual sizes
+            variants = get_variants(pid)
+            for v in variants[:3]:  # Limit to 3 sizes per product
+                var_id = v.get("id")
+                size = v.get("sizeChart", {}).get("displayOptions", [{}])[0].get("size", "N/A")
+                
+                var_market = get_variant_market_data(pid, var_id)
+                if var_market:
+                    std = var_market.get("standardMarketData", var_market)
+                    insert_market_data(pid, size, std.get("lowestAsk"), std.get("highestBidAmount"), std.get("sellFaster"))
+    
+    # Show what we got
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM market_data")
+    print(f"\nMarket data rows: {cur.fetchone()[0]}")
+    cur.execute("SELECT product_id, size, lowest_ask, highest_bid, sell_faster FROM market_data LIMIT 5")
+    print("Sample market data:")
+    for row in cur.fetchall():
+        print(f"  {row}")
+    conn.close()
