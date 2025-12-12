@@ -35,8 +35,10 @@ def check_db_exists(db_name: str = DB_NAME):
 
 def create_metrics(db_name: str = DB_NAME) -> dict:
     """
-    Read data from the products and market_data tables
-    and compute summary metrics for the project.
+    Compute metrics aligned with the current schema:
+    - StockX: average `lowest_ask` by `size` from `market_data`.
+    - Kicks: average `lowest_ask` by `size` from `kicks_prices`.
+    - Joined comparison: per-product/size pairs where both sources have data.
     """
 
     metrics = {
@@ -50,11 +52,12 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
         with sqlite3.connect(db_name) as conn:
             cur = conn.cursor()
 
-            # 1. Average last sale price by size
-            cur.execute("""
-                SELECT size, AVG(last_sale)
+            # StockX: average lowest_ask by size
+            cur.execute(
+                """
+                SELECT size, AVG(lowest_ask)
                 FROM market_data
-                WHERE last_sale IS NOT NULL
+                WHERE lowest_ask IS NOT NULL
                 GROUP BY size
                 ORDER BY size
             """)
@@ -101,6 +104,39 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
             metrics["overall_avg_volume"] = (
                 row[0] if row and row[0] is not None else 0
             )
+            metrics["kicks_avg_ask_by_size"] = {size: avg for size, avg in cur.fetchall()}
+
+            # Joined samples: prefer exact size match; fallback to StockX 'ALL' vs Kicks sizes
+            cur.execute(
+                """
+                SELECT p.name,
+                       m.size,
+                       COALESCE(m.lowest_ask, m.highest_bid) AS stockx_price,
+                       k.lowest_ask AS kicks_price
+                FROM market_data m
+                JOIN kicks_prices k ON k.product_id = m.product_id AND k.size = m.size
+                JOIN products p ON p.product_id = m.product_id
+                WHERE COALESCE(m.lowest_ask, m.highest_bid) IS NOT NULL
+                  AND k.lowest_ask IS NOT NULL
+                UNION ALL
+                SELECT p.name,
+                       k.size,
+                       COALESCE(m.lowest_ask, m.highest_bid) AS stockx_price,
+                       k.lowest_ask AS kicks_price
+                FROM market_data m
+                JOIN kicks_prices k ON k.product_id = m.product_id
+                JOIN products p ON p.product_id = m.product_id
+                WHERE m.size = 'ALL'
+                  AND COALESCE(m.lowest_ask, m.highest_bid) IS NOT NULL
+                  AND k.lowest_ask IS NOT NULL
+                ORDER BY 1, 2
+                LIMIT 20
+                """
+            )
+            metrics["stockx_vs_kicks_samples"] = [
+                {"name": name, "size": size, "stockx_ask": sx, "kicks_ask": kk}
+                for (name, size, sx, kk) in cur.fetchall()
+            ]
 
     except sqlite3.Error as e:
         print("Database error:", e)
