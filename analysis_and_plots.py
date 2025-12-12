@@ -42,7 +42,7 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
     metrics = {
         "avg_price_by_size": {},
         "top_products_by_volume": {},
-        "most_expensive_sales": {},  # <--- NEW METRIC ADDED
+        "most_expensive_sales": {},
         "overall_avg_volume": 0
     }
 
@@ -87,8 +87,6 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
                 ORDER BY m.last_sale DESC
                 LIMIT 10
             """)
-            # Using a list of tuples or dict for this might be better if names duplicate,
-            # but for simplicity we'll assume unique high sales or just take the top hits.
             metrics["most_expensive_sales"] = {
                 name: price for name, price in cur.fetchall()
             }
@@ -109,7 +107,6 @@ def create_metrics(db_name: str = DB_NAME) -> dict:
 
     return metrics
 
-
 def write_metrics_to_file(metrics: dict, filename: str = "metrics_summary.json"):
     """
     Write the calculated metrics to a JSON file.
@@ -120,7 +117,6 @@ def write_metrics_to_file(metrics: dict, filename: str = "metrics_summary.json")
         print(f"Successfully saved metrics to {filename}")
     except IOError as e:
         print("File write error:", e)
-
 
 def create_graphs(metrics: dict):
     """
@@ -142,7 +138,7 @@ def create_graphs(metrics: dict):
         plt.tight_layout()
         plt.savefig("avg_price_by_size.png")
         print("Saved graph: avg_price_by_size.png")
-        plt.close() # Close figure to free memory
+        plt.close()
 
     # 2. Product vs total sales volume (top 10)
     names = list(metrics["top_products_by_volume"].keys())
@@ -164,9 +160,8 @@ def create_graphs(metrics: dict):
         print("Saved graph: top_products_by_volume.png")
         plt.close()
 
-    # 3. Most Expensive Shoes (Top 10 by Price) <--- NEW VISUALIZATION
+    # 3. Most Expensive Shoes (Top 10 by Price)
     exp_names = list(metrics["most_expensive_sales"].keys())
-    # Shorten names
     short_exp_names = [n[:15] + "..." if len(n) > 15 else n for n in exp_names]
     prices = list(metrics["most_expensive_sales"].values())
 
@@ -184,9 +179,7 @@ def create_graphs(metrics: dict):
         print("Saved graph: most_expensive_shoes.png")
         plt.close()
 
-
 def main():
-    # Only proceed if data exists
     if not check_db_exists():
         return
 
@@ -195,7 +188,6 @@ def main():
     
     write_metrics_to_file(metrics, "metrics_summary.json")
     create_graphs(metrics)
-
 
 if __name__ == "__main__":
     main()
