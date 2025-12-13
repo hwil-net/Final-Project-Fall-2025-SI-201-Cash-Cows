@@ -79,7 +79,6 @@ def run_pipeline():
         # kicks data
         hist = api.get_historical_data(name)
         if hist:
-            api.insert_kicks_history_for_style(style_id, hist)
             api.insert_kicks_us_market_for_style(style_id, {
                 "historical_average": hist.get("historical_average"),
                 "last_sale": hist.get("last_sale"),
