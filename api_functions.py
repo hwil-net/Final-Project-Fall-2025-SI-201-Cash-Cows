@@ -22,21 +22,15 @@ def create_tables():
                    (id INTEGER PRIMARY KEY AUTOINCREMENT, product_key INTEGER, size TEXT,
                     lowest_ask REAL, highest_bid REAL, sell_faster REAL,
                     FOREIGN KEY (product_key) REFERENCES product_lookup(product_key))''')
-    # kicks.dev historical snapshot table
-    cur.execute('''CREATE TABLE IF NOT EXISTS kicks_history
-                   (id INTEGER PRIMARY KEY AUTOINCREMENT, product_key INTEGER,
-                    historical_average REAL, last_sale REAL, sales_last_72h INTEGER,
-                    FOREIGN KEY (product_key) REFERENCES product_lookup(product_key))''')
+    # kicks.dev historical snapshot table removed
     # optional: us market extras from kicks (earn_more)
     cur.execute('''CREATE TABLE IF NOT EXISTS kicks_us_market
                    (id INTEGER PRIMARY KEY AUTOINCREMENT, product_key INTEGER,
-                    historical_average REAL, last_sale REAL, sales_last_72h INTEGER,
-                    sell_faster REAL, earn_more REAL,
                     FOREIGN KEY (product_key) REFERENCES product_lookup(product_key))''')
     # kicks detailed variant prices (from display[variants]/display[prices])
     cur.execute('''CREATE TABLE IF NOT EXISTS kicks_prices
                    (id INTEGER PRIMARY KEY AUTOINCREMENT, product_key INTEGER,
-                    size TEXT, lowest_ask REAL, asks INTEGER, price_type TEXT, updated_at TEXT,
+                    size TEXT, lowest_ask REAL, asks INTEGER,
                     FOREIGN KEY (product_key) REFERENCES product_lookup(product_key))''')
     # lookup table for integer keys
     cur.execute('''CREATE TABLE IF NOT EXISTS product_lookup
@@ -154,25 +148,6 @@ def get_historical_data(query_term):
         print(f"error fetching kicks.dev: {e}")
         return None
 
-def insert_kicks_history_for_style(style_id, hist):
-    # save kicks history using integer product_key 
-    if not hist or not style_id:
-        return
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute("SELECT product_id FROM products WHERE style_id = ? LIMIT 1", (style_id,))
-    row = cur.fetchone()
-    if not row:
-        conn.close()
-        return
-    product_id = row[0]
-    product_key = get_product_key(product_id)
-    cur.execute('''INSERT INTO kicks_history (product_key, historical_average, last_sale, sales_last_72h)
-                   VALUES (?, ?, ?, ?)''',
-                (product_key, hist.get("historical_average"), hist.get("last_sale"), hist.get("sales_last_72h") or 0))
-    conn.commit()
-    conn.close()
-
 
 
 def get_kicks_product_id_or_slug(term):
@@ -229,15 +204,13 @@ def insert_kicks_prices_for_style(style_id, detail):
     for v in variants:
         size = v.get("size")
         lowest_ask = v.get("lowest_ask")
-        updated_at = v.get("updated_at")
         prices = v.get("prices") or []
         # choose first price entry if present
         price_entry = prices[0] if prices else None
         asks = price_entry.get("asks") if price_entry else None
-        price_type = price_entry.get("type") if price_entry else None
-        cur.execute('''INSERT INTO kicks_prices (product_key, size, lowest_ask, asks, price_type, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?)''',
-                    (product_key, size, lowest_ask, asks, price_type, updated_at))
+        cur.execute('''INSERT INTO kicks_prices (product_key, size, lowest_ask, asks)
+                   VALUES (?, ?, ?, ?)''',
+                (product_key, size, lowest_ask, asks))
         count += 1
         if count >= 5:
             break
@@ -256,14 +229,9 @@ def insert_kicks_us_market_for_style(style_id, hist):
         return
     pid = row[0]
     product_key = get_product_key(pid)
-    cur.execute('''INSERT INTO kicks_us_market (product_key, historical_average, last_sale, sales_last_72h, sell_faster, earn_more)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (product_key,
-                 hist.get("historical_average"),
-                 hist.get("last_sale"),
-                 hist.get("sales_last_72h") or 0,
-                 hist.get("sell_faster"),
-                 hist.get("earn_more")))
+    cur.execute('''INSERT INTO kicks_us_market (product_key)
+                   VALUES (?)''',
+                (product_key,))
     conn.commit()
     conn.close()
 
